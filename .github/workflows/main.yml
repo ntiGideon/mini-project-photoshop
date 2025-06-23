@@ -58,12 +58,13 @@ jobs:
           container-name: springboot-container
           image: ${{ steps.build-image.outputs.image }}
 
-      - name: Register ECS Task Definition
-        uses: aws-actions/amazon-ecs-register-task-definition@v1
-        id: register-task-definition
+      - name: Deploy to ECS Service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
           task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
-          wait-for-completion: true
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
 
       - name: Trigger AWS CodePipeline
         run: |
