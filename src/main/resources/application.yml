@@ -22,7 +22,7 @@ spring:
       cache: false
 
 server:
-  port: ${APP_PORT}
+  port: 8000
   error:
     whitelabel:
       enabled: false
