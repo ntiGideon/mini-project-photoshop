@@ -5,7 +5,7 @@
   "containerDefinitions": [
     {
       "name": "springboot-container",
-      "image": "767828749690.dkr.ecr.eu-central-1.amazonaws.com/fotoshop-app:latest",
+      "image": "767828749690.dkr.ecr.eu-central-1.amazonaws.com/springboot-image-app:latest",
       "essential": true,
       "portMappings": [
         {
