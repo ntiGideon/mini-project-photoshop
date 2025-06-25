@@ -1,0 +1,48 @@
+name: Blue/Green Deployment
+
+on:
+  workflow_run:
+    workflows: ["Build and Push to ECR"]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Create CodeDeploy Deployment
+        run: |
+          aws deploy create-deployment \
+            --application-name ImageApp-Deploy \
+            --deployment-group-name ImageApp-DG \
+            --revision '{
+              "revisionType": "AppSpecContent",
+              "appSpecContent": {
+                "content": "{
+                  \"version\": 1,
+                  \"Resources\": [{
+                    \"TargetService\": {
+                      \"Type\": \"AWS::ECS::Service\",
+                      \"Properties\": {
+                        \"TaskDefinition\": \"arn:aws:ecs:us-east-1:YOUR_ACCOUNT_ID:task-definition/ImageApp-Task:1\",
+                        \"LoadBalancerInfo\": {
+                          \"ContainerName\": \"ImageApp-Container\",
+                          \"ContainerPort\": 8080
+                        }
+                      }
+                    }
+                  }]
+                }"
+              }
+            }'

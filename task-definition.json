@@ -1,5 +1,5 @@
 {
-  "family": "springboot-app",
+  "family": "fotoshop-app",
   "networkMode": "awsvpc",
   "executionRoleArn": "ecsTaskExecutionRole",
   "containerDefinitions": [
