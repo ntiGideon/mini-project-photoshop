@@ -33,6 +33,15 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Deploy
+
+      - name: Verify role permissions
+        run: |
+          # Verify the role can pass the ECS task execution role
+          aws iam simulate-principal-policy \
+            --policy-source-arn ${{ secrets.AWS_ROLE_ARN }} \
+            --action-names "iam:PassRole" \
+            --resource-arns "arn:aws:iam::767828749690:role/ImageApp-ECSTaskExecutionRole"
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -41,7 +50,6 @@ jobs:
       - name: Generate image tags
         id: meta
         run: |
-          # Generate multiple tags for the image
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           
@@ -57,131 +65,56 @@ jobs:
           SHORT_SHA: ${{ steps.meta.outputs.short-sha }}
           COMMIT_SHA: ${{ steps.meta.outputs.commit-sha }}
         run: |
-          # Build the image
           docker build -t temp-image .
-          
-          # Tag with multiple tags for flexibility
           docker tag temp-image $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker tag temp-image $ECR_REGISTRY/$ECR_REPOSITORY:$COMMIT_SHA
           docker tag temp-image $ECR_REGISTRY/$ECR_REPOSITORY:$SHORT_SHA
           docker tag temp-image $ECR_REGISTRY/$ECR_REPOSITORY:build-$TIMESTAMP
           
-          # Push all tags
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$COMMIT_SHA
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$SHORT_SHA
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:build-$TIMESTAMP
           
-          # Use commit SHA as the primary deployment tag
-          DEPLOYMENT_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$COMMIT_SHA"
-          echo "image=$DEPLOYMENT_IMAGE" >> $GITHUB_OUTPUT
-          echo "Deploying image: $DEPLOYMENT_IMAGE"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$COMMIT_SHA" >> $GITHUB_OUTPUT
 
       - name: Create new task definition
         id: create-task-def
         env:
           NEW_IMAGE: ${{ steps.build-image.outputs.image }}
         run: |
-          # Create a new task definition with the new image
-          cat > new-task-definition.json << EOF
-          {
-            "family": "${{ env.TASK_DEFINITION_FAMILY }}",
-            "networkMode": "awsvpc",
-            "requiresCompatibilities": ["FARGATE"],
-            "cpu": "256",
-            "memory": "512",
-            "executionRoleArn": "arn:aws:iam::767828749690:role/ImageApp-ECSTaskExecutionRole",
-            "taskRoleArn": "arn:aws:iam::767828749690:role/ImageApp-ECSTaskExecutionRole",
-            "containerDefinitions": [
-              {
-                "name": "${{ env.CONTAINER_NAME }}",
-                "image": "$NEW_IMAGE",
-                "essential": true,
-                "portMappings": [
-                  {
-                    "containerPort": 8000,
-                    "protocol": "tcp"
-                  }
-                ],
-                "environment": [
-                  {
-                    "name": "SPRING_PROFILES_ACTIVE",
-                    "value": "production"
-                  },
-                  {
-                    "name": "AWS_REGION",
-                    "value": "${{ env.AWS_REGION }}"
-                  },
-                  {
-                    "name": "BUILD_VERSION",
-                    "value": "${{ steps.meta.outputs.short-sha }}"
-                  },
-                  {
-                    "name": "BUILD_TIMESTAMP",
-                    "value": "${{ steps.meta.outputs.timestamp }}"
-                  }
-                ],
-                "logConfiguration": {
-                  "logDriver": "awslogs",
-                  "options": {
-                    "awslogs-group": "/ecs/${{ env.TASK_DEFINITION_FAMILY }}",
-                    "awslogs-region": "${{ env.AWS_REGION }}",
-                    "awslogs-stream-prefix": "ecs"
-                  }
-                }
-              }
-            ]
-          }
-          EOF
+          # Get current task definition
+          CURRENT_TASK_DEF=$(aws ecs describe-task-definition --task-definition ${{ env.TASK_DEFINITION_FAMILY }} --query 'taskDefinition')
           
-          echo "Created new task definition:"
-          cat new-task-definition.json
+          # Create new task definition with updated image
+          echo "$CURRENT_TASK_DEF" | \
+            jq --arg IMAGE "$NEW_IMAGE" '.containerDefinitions[0].image = $IMAGE' | \
+            jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            > new-task-definition.json
+          
           echo "task-def-file=new-task-definition.json" >> $GITHUB_OUTPUT
 
       - name: Register new task definition
         id: register-task-def
         run: |
-          # Register the new task definition
           NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
             --cli-input-json file://${{ steps.create-task-def.outputs.task-def-file }} \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
           
-          echo "New task definition registered: $NEW_TASK_DEF_ARN"
           echo "task-definition-arn=$NEW_TASK_DEF_ARN" >> $GITHUB_OUTPUT
 
       - name: Update ECS service
         id: deploy-service
         run: |
-          # Update the service to use the new task definition
           aws ecs update-service \
             --cluster ${{ env.CLUSTER_NAME }} \
             --service ${{ env.SERVICE_NAME }} \
             --task-definition ${{ steps.register-task-def.outputs.task-definition-arn }} \
             --force-new-deployment
-          
-          echo "Service update initiated"
 
       - name: Wait for service stability
         run: |
-          echo "Waiting for service to reach stable state..."
           aws ecs wait services-stable \
             --cluster ${{ env.CLUSTER_NAME }} \
             --services ${{ env.SERVICE_NAME }}
-          
-          echo "Service deployment completed successfully!"
-
-      - name: Get deployment info
-        run: |
-          # Get the current service status
-          aws ecs describe-services \
-            --cluster ${{ env.CLUSTER_NAME }} \
-            --services ${{ env.SERVICE_NAME }} \
-            --query 'services[0].{ServiceName:serviceName,TaskDefinition:taskDefinition,RunningCount:runningCount,DesiredCount:desiredCount,Status:status}' \
-            --output table
-          
-          echo ""
-          echo "Deployment Summary:"
-          echo "- Image deployed: ${{ steps.build-image.outputs.image }}"
-          echo "- Commit SHA: ${{ github.sha }}"
-          echo "- Build timestamp: ${{ steps.meta.outputs.timestamp }}"
