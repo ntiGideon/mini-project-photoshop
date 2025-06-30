@@ -5,6 +5,7 @@
   "cpu": "256",
   "memory": "512",
   "executionRoleArn": "arn:aws:iam::767828749690:role/ImageApp-ECSTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::767828749690:role/ImageApp-ECSTaskExecutionRole",
   "containerDefinitions": [
     {
       "name": "ImageApp-Container",
@@ -13,7 +14,6 @@
       "portMappings": [
         {
           "containerPort": 8000,
-          "hostPort": 8000,
           "protocol": "tcp"
         }
       ],
