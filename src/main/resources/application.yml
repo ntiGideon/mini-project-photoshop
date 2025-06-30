@@ -27,7 +27,14 @@ server:
     whitelabel:
       enabled: false
     path: /error
-
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health,info
 aws:
   s3:
     bucket-name: ${AWS_BUCKET_NAME}
