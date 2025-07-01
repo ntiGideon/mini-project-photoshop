@@ -27,12 +27,10 @@ public class ImageService {
 
     public Long uploadImage(ImageDto imageDto) throws IOException {
         try {
-            // Validate file size (e.g., max 5MB)
             if (imageDto.file().getSize() > 5_242_880) {
                 throw new IOException("File size exceeds 5MB limit");
             }
 
-            // Validate file type
             String contentType = imageDto.file().getContentType();
             if (contentType == null || !contentType.startsWith("image/")) {
                 throw new IOException("Invalid file type. Only images are allowed");
