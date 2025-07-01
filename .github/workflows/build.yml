@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Build and Blue/Green Deploy
 
 on:
   push:
@@ -7,6 +7,8 @@ on:
       - 'src/**'
       - 'Dockerfile'
       - '.github/workflows/build.yml'
+      - 'task-definition.json'
+      - 'appspec.yml'
 
 env:
   AWS_REGION: eu-central-1
@@ -15,6 +17,9 @@ env:
   TASK_DEFINITION_FAMILY: ImageApp-Task
   CLUSTER_NAME: ImageApp-Cluster
   SERVICE_NAME: ImageApp-Service
+  CODEDEPLOY_APP: ImageApp-Deploy
+  CODEDEPLOY_GROUP: ImageApp-DG
+  S3_BUCKET: fotografi-app  # Replace with your S3 bucket name
 
 jobs:
   build-and-deploy:
@@ -34,14 +39,6 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActions-Deploy
-
-      - name: Verify role permissions
-        run: |
-          # Verify the role can pass the ECS task execution role
-          aws iam simulate-principal-policy \
-            --policy-source-arn ${{ secrets.AWS_ROLE_ARN }} \
-            --action-names "iam:PassRole" \
-            --resource-arns "arn:aws:iam::767828749690:role/ImageApp-ECSTaskExecutionRole"
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -78,43 +75,46 @@ jobs:
           
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$COMMIT_SHA" >> $GITHUB_OUTPUT
 
-      - name: Create new task definition
-        id: create-task-def
-        env:
-          NEW_IMAGE: ${{ steps.build-image.outputs.image }}
+      - name: Update task definition with new image
+        id: update-task-def
         run: |
-          # Get current task definition
-          CURRENT_TASK_DEF=$(aws ecs describe-task-definition --task-definition ${{ env.TASK_DEFINITION_FAMILY }} --query 'taskDefinition')
-          
-          # Create new task definition with updated image
-          echo "$CURRENT_TASK_DEF" | \
-            jq --arg IMAGE "$NEW_IMAGE" '.containerDefinitions[0].image = $IMAGE' | \
-            jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
-            > new-task-definition.json
-          
-          echo "task-def-file=new-task-definition.json" >> $GITHUB_OUTPUT
+          # Update the existing task-definition.json with new image
+          jq --arg IMAGE "${{ steps.build-image.outputs.image }}" \
+            '.containerDefinitions[0].image = $IMAGE' \
+            task-definition.json > updated-task-definition.json
+          mv updated-task-definition.json task-definition.json
 
-      - name: Register new task definition
+      - name: Upload config files to S3
+        run: |
+          aws s3 cp task-definition.json s3://${{ env.S3_BUCKET }}/task-definition.json
+          aws s3 cp appspec.yml s3://${{ env.S3_BUCKET }}/appspec.yml
+
+      - name: Register task definition
         id: register-task-def
         run: |
-          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://${{ steps.create-task-def.outputs.task-def-file }} \
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://task-definition.json \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
-          
-          echo "task-definition-arn=$NEW_TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          echo "task-definition-arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
 
-      - name: Update ECS service
-        id: deploy-service
+      - name: Create CodeDeploy Deployment
+        id: codedeploy
         run: |
-          aws ecs update-service \
-            --cluster ${{ env.CLUSTER_NAME }} \
-            --service ${{ env.SERVICE_NAME }} \
-            --task-definition ${{ steps.register-task-def.outputs.task-definition-arn }} \
-            --force-new-deployment
+          DEPLOYMENT_ID=$(aws deploy create-deployment \
+            --application-name ${{ env.CODEDEPLOY_APP }} \
+            --deployment-group-name ${{ env.CODEDEPLOY_GROUP }} \
+            --revision '{
+              "revisionType": "AppSpecContent",
+              "appSpecContent": {
+                "content": "file://appspec.yml"
+              }
+            }' \
+            --query 'deploymentId' \
+            --output text)
+          echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
 
-      - name: Wait for service stability
+      - name: Wait for Deployment Success
         run: |
-          aws ecs wait services-stable \
-            --cluster ${{ env.CLUSTER_NAME }} \
-            --services ${{ env.SERVICE_NAME }}
+          aws deploy wait deployment-successful \
+            --deployment-id ${{ steps.codedeploy.outputs.deployment-id }}
