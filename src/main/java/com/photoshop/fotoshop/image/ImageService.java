@@ -68,7 +68,6 @@ public class ImageService {
         try {
             URI uri = new URI(s3Url);
             String path = uri.getPath();
-            // Remove leading slash if present
             return path.startsWith("/") ? path.substring(1) : path;
         } catch (URISyntaxException e) {
             throw new RuntimeException("Invalid S3 URL format", e);
