@@ -41,7 +41,7 @@ public class ImageController {
             @RequestParam("name") String name,
             @RequestParam("description") String description,
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "featured", defaultValue = "false") boolean featured
+            @RequestParam(value = "featured") boolean featured
             ) {
 
         try {
@@ -123,17 +123,13 @@ public class ImageController {
     @ResponseBody
     public ResponseEntity<Map<String, Object>> deleteImage(@PathVariable Long id) {
         try {
-            // Get the image first to get the S3 URL
             Image image = imageRepository.findById(id)
                     .orElseThrow(() -> new RuntimeException("Image not found"));
 
-            // Extract key from URL
             String key = imageService.extractKeyFromUrl(image.getS3Url());
 
-            // Delete from S3
             imageService.deleteFile(key);
 
-            // Delete from database
             imageRepository.deleteById(id);
 
             Map<String, Object> response = new HashMap<>();

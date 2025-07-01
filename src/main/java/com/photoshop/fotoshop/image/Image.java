@@ -28,7 +28,7 @@ public class Image {
     @Column(nullable = false)
     private String description;
 
-    @Column(nullable = false, name = "featured", columnDefinition = "boolean default false")
+    @Column(nullable = false, name = "featured")
     private boolean featured = false;
 
     @Column(name = "s3_url", nullable = false)
