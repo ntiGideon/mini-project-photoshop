@@ -198,7 +198,7 @@ jobs:
           aws deploy get-deployment \
             --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
             --query 'deploymentInfo.[deploymentId,status,errorInformation,message]' \
-            --output table
+            --output json
           
           echo "📋 Listing deployment instances (if any):"
           aws deploy list-deployment-instances \
