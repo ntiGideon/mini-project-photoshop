@@ -3,13 +3,7 @@ Resources:
   - TargetService:
       Type: AWS::ECS::Service
       Properties:
-        TaskDefinition: "<TASK_DEF_ARN>"
+        TaskDefinition: "<TASK_DEFINITION_ARN>"
         LoadBalancerInfo:
-          ContainerName: "ImageApp-Container"
+          ContainerName: "<CONTAINER_NAME>"
           ContainerPort: 8000
-Hooks:
-  - BeforeInstall: "LambdaFunctionToValidateBeforeInstall"
-  - AfterInstall: "LambdaFunctionToValidateAfterInstall"
-  - AfterAllowTestTraffic: "LambdaFunctionToValidateAfterTestTrafficStarts"
-  - BeforeAllowTraffic: "LambdaFunctionToValidateBeforeTrafficShift"
-  - AfterAllowTraffic: "LambdaFunctionToValidateAfterTrafficShift"
