@@ -18,7 +18,7 @@ env:
   ECS_TASK_DEFINITION: ImageApp-Task
   CONTAINER_NAME: ImageApp-Container
   CODEDEPLOY_APPLICATION: ImageApp-App
-  CODEDEPLOY_DEPLOYMENT_GROUP: ImageApp-DG
+  CODEDEPLOY_DEPLOYMENT_GROUP: ImageApp-App
   S3_BUCKET: image-app-codedeploy-artifacts
   HEALTH_CHECK_PATH: /actuator/health
   SPRING_PROFILES_ACTIVE: production
