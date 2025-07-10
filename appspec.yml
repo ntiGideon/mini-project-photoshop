@@ -1,9 +1,9 @@
-version: 1
+version: 0.0
 Resources:
   - TargetService:
       Type: AWS::ECS::Service
       Properties:
         TaskDefinition: "<TASK_DEFINITION_ARN>"
         LoadBalancerInfo:
-          ContainerName: "ImageApp-Container"
+          ContainerName: "<CONTAINER_NAME>"
           ContainerPort: 8000
