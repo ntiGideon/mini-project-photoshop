@@ -156,12 +156,6 @@ jobs:
                     ContainerName: "${{ env.CONTAINER_NAME }}"
                     ContainerPort: 8000
                   PlatformVersion: "LATEST"
-          Hooks:
-            - BeforeInstall: "LambdaFunctionToValidateBeforeInstall"
-            - AfterInstall: "LambdaFunctionToValidateAfterInstall"
-            - AfterAllowTestTraffic: "LambdaFunctionToValidateAfterTestTrafficStarts"
-            - BeforeAllowTraffic: "LambdaFunctionToValidateBeforeTrafficShift"
-            - AfterAllowTraffic: "LambdaFunctionToValidateAfterTrafficShift"
           EOF
           
           echo "✅ appspec.yaml created:"
