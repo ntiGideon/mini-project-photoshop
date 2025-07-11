@@ -22,6 +22,7 @@ env:
   S3_BUCKET: image-app-codedeploy-artifacts
   HEALTH_CHECK_PATH: /actuator/health
   SPRING_PROFILES_ACTIVE: production
+  DEPLOYMENT_TIMEOUT: 1800
 
 jobs:
   test:
@@ -99,6 +100,8 @@ jobs:
       contents: read
       id-token: write
 
+    timeout-minutes: 60
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -169,11 +172,12 @@ jobs:
       - name: Trigger CodeDeploy Deployment
         id: deploy
         run: |
+          # Consider using a more gradual deployment strategy
           DEPLOYMENT_ID=$(aws deploy create-deployment \
             --application-name $CODEDEPLOY_APPLICATION \
             --deployment-group-name $CODEDEPLOY_DEPLOYMENT_GROUP \
             --s3-location bucket=$S3_BUCKET,key=deployments/deployment-${{ github.sha }}.zip,bundleType=zip \
-            --deployment-config-name CodeDeployDefault.ECSAllAtOnce \
+            --deployment-config-name CodeDeployDefault.ECSLinear10PercentEvery1Minutes \
             --auto-rollback-configuration enabled=true,events=DEPLOYMENT_FAILURE \
             --query deploymentId --output text)
           echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
@@ -181,7 +185,24 @@ jobs:
 
       - name: Wait for Deployment to Complete
         run: |
-          aws deploy wait deployment-successful --deployment-id ${{ steps.deploy.outputs.deployment-id }}
+          echo "⏳ Waiting for deployment to complete (timeout: ${{ env.DEPLOYMENT_TIMEOUT }} seconds)..."
+          # Add --no-paginate to prevent CLI timeouts
+          aws deploy wait deployment-successful \
+            --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
+            --region $AWS_REGION \
+            --no-paginate
+          
+          # Check the final status explicitly
+          STATUS=$(aws deploy get-deployment \
+            --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
+            --query 'deploymentInfo.status' \
+            --output text)
+          
+          if [ "$STATUS" != "Succeeded" ]; then
+            echo "❌ Deployment failed with status: $STATUS"
+            exit 1
+          fi
+          echo "✅ Deployment succeeded!"
 
       - name: Debug failed deployment (if any)
         if: failure()
@@ -191,7 +212,7 @@ jobs:
           echo "🧾 Deployment Info:"
           aws deploy get-deployment \
             --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
-            --query 'deploymentInfo.[deploymentId,status,errorInformation,message]' \
+            --query 'deploymentInfo.[deploymentId,status,errorInformation,completeTime,createTime,revision]' \
             --output json
           
           echo "📋 Listing deployment instances (if any):"
@@ -204,6 +225,13 @@ jobs:
             --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
             --query 'deploymentInfo.deploymentOverview' \
             --output json
+          
+          echo "🔍 Checking ECS service events:"
+          aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE \
+            --query 'services[0].events' \
+            --output table
 
       - name: Verify Deployment
         run: |
@@ -213,13 +241,25 @@ jobs:
             --query "LoadBalancers[?contains(LoadBalancerName, 'ImageApp-ALB')].DNSName" \
             --output text)
           
-          echo "Waiting 30 seconds before health check..."
-          sleep 30
+          echo "Waiting 60 seconds before health check to ensure all instances are healthy..."
+          sleep 60
           
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$ALB_DNS${{ env.HEALTH_CHECK_PATH }})
-          if [ "$STATUS" = "200" ]; then
-            echo "✅ App healthy at: http://$ALB_DNS"
-          else
-            echo "❌ Health check failed. HTTP $STATUS"
-            exit 1
-          fi
+          # Try multiple times with delay
+          MAX_RETRIES=5
+          RETRY_DELAY=30
+          for i in $(seq 1 $MAX_RETRIES); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$ALB_DNS${{ env.HEALTH_CHECK_PATH }} || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ App healthy at: http://$ALB_DNS"
+              break
+            else
+              echo "❌ Health check attempt $i failed. HTTP $STATUS"
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "Waiting $RETRY_DELAY seconds before retry..."
+                sleep $RETRY_DELAY
+              else
+                echo "❌ Health check failed after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
