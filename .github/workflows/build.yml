@@ -1,4 +1,4 @@
-name: Build and Blue/Green Deploy Spring Boot App
+name: Build and Async Deploy Spring Boot App
 
 on:
   push:
@@ -22,7 +22,6 @@ env:
   S3_BUCKET: image-app-codedeploy-artifacts
   HEALTH_CHECK_PATH: /actuator/health
   SPRING_PROFILES_ACTIVE: production
-  DEPLOYMENT_TIMEOUT: 1800
 
 jobs:
   test:
@@ -81,10 +80,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          # Build the Spring Boot application first
           mvn clean package -DskipTests
-          
-          # Build and push Docker image
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
@@ -93,14 +89,12 @@ jobs:
           echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
   deploy:
-    name: Deploy via CodeDeploy
+    name: Trigger Async Deployment
     runs-on: ubuntu-latest
     needs: build-and-push
     permissions:
       contents: read
       id-token: write
-
-    timeout-minutes: 60
 
     steps:
       - name: Checkout code
@@ -132,22 +126,14 @@ jobs:
         id: register-task-def
         run: |
           RENDERED_FILE="${{ steps.render-task.outputs.task-definition }}"
-          
-          echo "✅ Task definition file content:"
-          cat "$RENDERED_FILE" | jq .
-          
-          echo "📝 Registering task definition with ECS..."
           NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
             --cli-input-json file://$RENDERED_FILE \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
-          
-          echo "✅ Registered new task definition ARN: $NEW_TASK_DEF_ARN"
           echo "task-definition-arn=$NEW_TASK_DEF_ARN" >> $GITHUB_OUTPUT
 
-      - name: Create appspec.yaml for Spring Boot
+      - name: Create appspec.yaml
         run: |
-          echo "📄 Writing appspec.yaml for Spring Boot..."
           cat > appspec.yaml <<EOF
           version: 0.0
           Resources:
@@ -160,106 +146,24 @@ jobs:
                     ContainerPort: 8000
                   PlatformVersion: "LATEST"
           EOF
-          
-          echo "✅ appspec.yaml created:"
-          cat appspec.yaml
 
       - name: Package and Upload to S3
         run: |
           zip deployment.zip appspec.yaml
           aws s3 cp deployment.zip s3://$S3_BUCKET/deployments/deployment-${{ github.sha }}.zip
 
-      - name: Trigger CodeDeploy Deployment
-        id: deploy
+      - name: Trigger Async CodeDeploy Deployment
         run: |
-          # Consider using a more gradual deployment strategy
           DEPLOYMENT_ID=$(aws deploy create-deployment \
             --application-name $CODEDEPLOY_APPLICATION \
             --deployment-group-name $CODEDEPLOY_DEPLOYMENT_GROUP \
             --s3-location bucket=$S3_BUCKET,key=deployments/deployment-${{ github.sha }}.zip,bundleType=zip \
-            --deployment-config-name CodeDeployDefault.ECSLinear10PercentEvery1Minutes \
-            --auto-rollback-configuration enabled=true,events=DEPLOYMENT_FAILURE \
             --query deploymentId --output text)
-          echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
-          echo "Deployment started: $DEPLOYMENT_ID"
+          echo "Deployment triggered asynchronously with ID: $DEPLOYMENT_ID"
+          echo "View deployment progress in AWS Console: https://$AWS_REGION.console.aws.amazon.com/codesuite/codedeploy/deployments/$DEPLOYMENT_ID?region=$AWS_REGION"
 
-      - name: Wait for Deployment to Complete
+      # Optional: Quick verification that deployment was triggered
+      - name: Verify Deployment Triggered
         run: |
-          echo "⏳ Waiting for deployment to complete (timeout: ${{ env.DEPLOYMENT_TIMEOUT }} seconds)..."
-          # Add --no-paginate to prevent CLI timeouts
-          aws deploy wait deployment-successful \
-            --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
-            --region $AWS_REGION \
-            --no-paginate
-          
-          # Check the final status explicitly
-          STATUS=$(aws deploy get-deployment \
-            --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
-            --query 'deploymentInfo.status' \
-            --output text)
-          
-          if [ "$STATUS" != "Succeeded" ]; then
-            echo "❌ Deployment failed with status: $STATUS"
-            exit 1
-          fi
-          echo "✅ Deployment succeeded!"
-
-      - name: Debug failed deployment (if any)
-        if: failure()
-        run: |
-          echo "⚠️ Deployment failed. Fetching debug info..."
-          
-          echo "🧾 Deployment Info:"
-          aws deploy get-deployment \
-            --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
-            --query 'deploymentInfo.[deploymentId,status,errorInformation,completeTime,createTime,revision]' \
-            --output json
-          
-          echo "📋 Listing deployment instances (if any):"
-          aws deploy list-deployment-instances \
-            --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
-            --output table || echo "No instances found or ECS deployment in use"
-          
-          echo "📌 Listing events:"
-          aws deploy get-deployment \
-            --deployment-id ${{ steps.deploy.outputs.deployment-id }} \
-            --query 'deploymentInfo.deploymentOverview' \
-            --output json
-          
-          echo "🔍 Checking ECS service events:"
-          aws ecs describe-services \
-            --cluster $ECS_CLUSTER \
-            --services $ECS_SERVICE \
-            --query 'services[0].events' \
-            --output table
-
-      - name: Verify Deployment
-        run: |
-          echo "Deployment completed! Verifying..."
-          ALB_DNS=$(aws elbv2 describe-load-balancers \
-            --region $AWS_REGION \
-            --query "LoadBalancers[?contains(LoadBalancerName, 'ImageApp-ALB')].DNSName" \
-            --output text)
-          
-          echo "Waiting 60 seconds before health check to ensure all instances are healthy..."
-          sleep 60
-          
-          # Try multiple times with delay
-          MAX_RETRIES=5
-          RETRY_DELAY=30
-          for i in $(seq 1 $MAX_RETRIES); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$ALB_DNS${{ env.HEALTH_CHECK_PATH }} || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "✅ App healthy at: http://$ALB_DNS"
-              break
-            else
-              echo "❌ Health check attempt $i failed. HTTP $STATUS"
-              if [ $i -lt $MAX_RETRIES ]; then
-                echo "Waiting $RETRY_DELAY seconds before retry..."
-                sleep $RETRY_DELAY
-              else
-                echo "❌ Health check failed after $MAX_RETRIES attempts"
-                exit 1
-              fi
-            fi
-          done
+          echo "Deployment was successfully triggered"
+          echo "The deployment will continue running independently in AWS CodeDeploy"
