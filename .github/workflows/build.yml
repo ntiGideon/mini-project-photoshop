@@ -13,12 +13,12 @@ on:
 env:
   AWS_REGION: eu-central-1
   ECR_REPOSITORY: springboot-image-app
-  ECS_CLUSTER: ImageApp-Cluster
-  ECS_SERVICE: ImageApp-Service
-  ECS_TASK_DEFINITION: ImageApp-Task
-  CONTAINER_NAME: ImageApp-Container
-  CODEDEPLOY_APPLICATION: ImageApp-App
-  CODEDEPLOY_DEPLOYMENT_GROUP: ImageApp-App
+  ECS_CLUSTER: FotoApp-Cluster
+  ECS_SERVICE: FotoApp-Service
+  ECS_TASK_DEFINITION: FotoApp-Task
+  CONTAINER_NAME: FotoApp-Container
+  CODEDEPLOY_APPLICATION: FotoApp-App
+  CODEDEPLOY_DEPLOYMENT_GROUP: FotoApp-DeploymentGroup
   S3_BUCKET: image-app-codedeploy-artifacts
   HEALTH_CHECK_PATH: /actuator/health
   SPRING_PROFILES_ACTIVE: production
